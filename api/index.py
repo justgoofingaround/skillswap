@@ -14,8 +14,24 @@ from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
-DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or ""
-PG = DATABASE_URL.startswith("postgres")
+def _pg_url():
+    """Pick the Postgres URL from the environment and drop query params libpq rejects.
+
+    Supabase's Vercel integration sets POSTGRES_URL with extras like `supa=...` and
+    `pgbouncer=true`, which make libpq fail with 'invalid URI query parameter'.
+    """
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+    raw = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or ""
+    if not raw.startswith("postgres"):
+        return ""
+    keep = {"sslmode", "sslrootcert", "connect_timeout", "application_name", "options", "target_session_attrs"}
+    u = urlsplit(raw)
+    q = [(k, v) for k, v in parse_qsl(u.query) if k in keep]
+    return urlunsplit((u.scheme, u.netloc, u.path, urlencode(q), ""))
+
+
+DATABASE_URL = _pg_url()
+PG = bool(DATABASE_URL)
 ON_VERCEL = bool(os.environ.get("VERCEL"))
 # Vercel's filesystem is read-only except /tmp. Without Postgres there, fall back to /tmp
 # so the app still works, but data is temporary (per instance, lost on redeploy).
@@ -62,6 +78,7 @@ class DB:
         if PG:
             import psycopg
             from psycopg.rows import dict_row
+            # prepare_threshold=None: required behind Supabase's transaction pooler (pgbouncer)
             self.con = psycopg.connect(DATABASE_URL, row_factory=dict_row, prepare_threshold=None, connect_timeout=10)
         else:
             self.con = sqlite3.connect(SQLITE_PATH, timeout=10)
