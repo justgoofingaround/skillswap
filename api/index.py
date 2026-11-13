@@ -436,8 +436,15 @@ class handler(BaseHTTPRequestHandler):
 
     def route(self, method):
         try:
+            # On Vercel the rewrite delivers every call as /api/index?route=<original path>;
+            # locally the original path arrives as-is.
+            from urllib.parse import parse_qs, urlsplit
+            u = urlsplit(self.path)
+            route = (parse_qs(u.query).get("route") or [""])[0] or u.path.split("/api/", 1)[-1]
+            path = "/api/" + route.strip("/")
+            if path == "/api/index" or not self.path.startswith("/api"):
+                raise ApiError(404, "Not found.")
             init_db()
-            path = "/api/" + self.path.split("?")[0].split("/api/", 1)[-1].strip("/")
             with DB() as d:
                 if method == "GET" and path == "/api/state":
                     return self.send_json(200, self.state(d))
