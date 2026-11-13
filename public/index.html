@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SkillSwap</title>
+<meta name="description" content="Teach what you know, learn what you don't. Teach an hour, earn a credit, spend it with anyone.">
+<meta name="theme-color" content="#116149">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23116149'/><text x='16' y='22' font-size='18' text-anchor='middle' fill='white' font-family='sans-serif'>⇄</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap">
+<link rel="stylesheet" href="/app.css">
+<style>
+  :root { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  body { margin: 0; }
+  [hidden] { display: none !important; }
+  .welcome { display: grid; grid-template-columns: 1.1fr 1fr; gap: 22px; align-items: start; }
+  .welcome h1 { font-size: 40px; line-height: 1.04; }
+  .pitch { display: flex; flex-direction: column; gap: 14px; }
+  .how { display: grid; gap: 10px; margin: 6px 0 0; padding: 0; list-style: none; counter-reset: s; }
+  .how li { display: grid; grid-template-columns: 30px 1fr; gap: 10px; align-items: start; font-size: 14.5px; }
+  .how li::before { counter-increment: s; content: counter(s); width: 30px; height: 30px; border-radius: 50%; background: var(--coin); color: var(--coin-ink); display: grid; place-items: center; font: 700 13px var(--mono); }
+  .suggest { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .suggest button { border: 1px dashed var(--line); background: var(--surface); border-radius: 999px; padding: 3px 10px; font-size: 12.5px; cursor: pointer; min-height: 30px; }
+  .suggest button:hover { border-color: var(--accent); color: var(--accent); }
+  .err { color: var(--danger); font-size: 13.5px; min-height: 1.2em; }
+  .live { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+  .live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .qrwrap { display: grid; place-items: center; padding: 14px; background: #fff; border-radius: 14px; }
+  .code { font: 700 22px var(--mono); letter-spacing: 0.15em; background: var(--sunken); border: 1px dashed var(--line); border-radius: 10px; padding: 8px 14px; text-align: center; }
+  .linkbtn { border: 0; background: none; color: var(--accent); font-weight: 600; cursor: pointer; padding: 6px 0; min-height: 36px; }
+  .share-url { word-break: break-all; font: 500 13px var(--mono); text-align: center; }
+  @media (max-width: 760px) { .welcome { grid-template-columns: 1fr; } .welcome h1 { font-size: 30px; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <div class="brand"><div class="logo" aria-hidden="true">⇄</div>SkillSwap</div>
+    <button class="btn" id="shareBtn" aria-label="Share SkillSwap with a QR code">Share</button>
+    <button class="wallet" id="walletBtn" hidden aria-label="Your credits"><span class="coin" aria-hidden="true">¢</span><span><span class="num" id="walletN">0</span> credits</span></button>
+    <nav class="tabs" role="tablist" aria-label="Sections" id="tabs" hidden>
+      <button role="tab" data-v="market" aria-selected="true">Market</button>
+      <button role="tab" data-v="sessions" aria-selected="false">Sessions <span class="dot" id="sessDot" hidden>0</span></button>
+      <button role="tab" data-v="profile" aria-selected="false">Profile</button>
+      <button role="tab" data-v="campus" aria-selected="false">Campus</button>
+      <button role="tab" data-v="plans" aria-selected="false">Plans</button>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="notice" id="offline" hidden>Can't reach SkillSwap right now. Retrying…</div>
+
+  <!-- WELCOME / JOIN -->
+  <section class="view" id="v-join" hidden>
+    <div class="welcome">
+      <div class="pitch">
+        <span class="live" id="liveCount">Live now</span>
+        <h1>Your knowledge is your currency.</h1>
+        <p class="muted">Teach someone for an hour, earn a credit. Spend it learning anything from anyone. No money changes hands.</p>
+        <ol class="how">
+          <li><span><b>List what you can teach</b> and what you want to learn.</span></li>
+          <li><span><b>Book anyone</b> with your 2 free credits. No need for a one-to-one trade.</span></li>
+          <li><span><b>Teach to earn more.</b> Credits move when the learner confirms it happened.</span></li>
+        </ol>
+      </div>
+      <form class="card" id="joinForm" novalidate>
+        <h2>Join in 30 seconds</h2>
+        <div><label class="l" for="jName">Your name</label><input class="field" id="jName" autocomplete="given-name" maxlength="60" required></div>
+        <div><label class="l" for="jMajor">Major or program</label><input class="field" id="jMajor" maxlength="60" placeholder="MS Computer Engineering"></div>
+        <div><label class="l" for="jTeach">I can teach</label><input class="field" id="jTeach" maxlength="200" placeholder="Figma, Excel, public speaking">
+          <div class="suggest" data-for="jTeach"></div></div>
+        <div><label class="l" for="jWant">I want to learn</label><input class="field" id="jWant" maxlength="200" placeholder="Python, interview prep">
+          <div class="suggest" data-for="jWant"></div></div>
+        <p class="err" id="joinErr" role="alert"></p>
+        <button class="btn primary" type="submit" id="joinBtn">Join and get 2 credits</button>
+        <p class="small muted">Already joined on another device? <button type="button" class="linkbtn" id="haveCode">Use your login code</button></p>
+      </form>
+    </div>
+    <div class="card"><div class="row" style="justify-content:space-between"><h2>Already on SkillSwap</h2><span class="small muted" id="joinCount"></span></div><div class="people" id="previewPeople"></div></div>
+  </section>
+
+  <!-- MARKET -->
+  <section class="view" id="v-market" hidden>
+    <div class="hero">
+      <h1 id="hello">Teach what you know. Learn what you don't.</h1>
+      <p class="muted">Teach for an hour, earn a credit. Spend it with anyone.</p>
+    </div>
+    <div id="loopBox"></div>
+    <div class="search"><input class="field" id="q" type="search" placeholder="Search a skill: Excel, Figma, Python, interview prep…" aria-label="Search skills or people"></div>
+    <div class="chips" id="skillChips" aria-label="Popular skills"></div>
+    <div class="row" style="justify-content:space-between"><h2 id="marketTitle">People</h2><span class="small muted" id="marketCount"></span></div>
+    <div class="people" id="people"></div>
+  </section>
+
+  <!-- SESSIONS -->
+  <section class="view" id="v-sessions" hidden>
+    <h1>Sessions</h1>
+    <div class="grid2">
+      <div class="card"><h2>Requests to you</h2><p class="small muted">Accept to teach. You earn credits when the learner confirms it happened.</p><div class="bars" id="incoming"></div></div>
+      <div class="card"><h2>Your learning</h2><p class="small muted">Credits are held when you book and returned if it's declined or cancelled.</p><div class="bars" id="outgoing"></div></div>
+    </div>
+  </section>
+
+  <!-- PROFILE -->
+  <section class="view" id="v-profile" hidden>
+    <div class="grid2">
+      <form class="card" id="profileForm">
+        <h2>Your profile</h2>
+        <div><label class="l" for="pName">Name</label><input class="field" id="pName" required maxlength="60"></div>
+        <div><label class="l" for="pMajor">Major or program</label><input class="field" id="pMajor" maxlength="60"></div>
+        <div><label class="l" for="pHeadline">One line about you</label><input class="field" id="pHeadline" maxlength="100" placeholder="Designer who wants to learn to code"></div>
+        <div><label class="l" for="pTeach">I can teach (comma separated)</label><input class="field" id="pTeach" maxlength="200"></div>
+        <div><label class="l" for="pWant">I want to learn (comma separated)</label><input class="field" id="pWant" maxlength="200"></div>
+        <div class="row"><button class="btn primary" type="submit" id="saveBtn">Save profile</button><span class="small muted" id="saveMsg" role="status"></span></div>
+      </form>
+      <div class="card">
+        <h2>Wallet</h2>
+        <div class="balance"><span class="coin" aria-hidden="true">¢</span><div><b class="num" id="balN">0</b><div class="small muted"><span class="num" id="heldN">0</span> held for upcoming sessions</div></div></div>
+        <p class="small muted">1 hour taught = 1 credit. Only the learner can confirm a session, and you can earn at most 3 credits a week from the same person.</p>
+        <table class="ledger"><tbody id="ledger"></tbody></table>
+        <button class="btn coinbtn" id="buyBtn">Buy credits</button>
+      </div>
+      <div class="card">
+        <h2>Log in on another device</h2>
+        <p class="small muted">Use this code on your laptop or phone. Keep it private, it's your key.</p>
+        <div class="code" id="myCode">——</div>
+        <button class="btn danger" id="logoutBtn">Log out on this device</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- CAMPUS -->
+  <section class="view" id="v-campus" hidden>
+    <div class="hero"><span class="eyebrow">For universities</span><h1>Campus impact</h1><p class="muted">What a university sees: real exchanges, between real departments, live.</p></div>
+    <div class="kpis">
+      <div class="kpi"><b id="cMembers">0</b><span>Members</span></div>
+      <div class="kpi"><b id="cSessions">0</b><span>Completed swaps</span></div>
+      <div class="kpi"><b id="cHours">0</b><span>Hours of peer teaching</span></div>
+      <div class="kpi"><b id="cCross">–</b><span>Swaps across majors</span></div>
+      <div class="kpi"><b id="cRating">–</b><span>Average rating</span></div>
+    </div>
+    <div class="grid2">
+      <div class="card"><h2>Most taught</h2><div class="bars" id="supply"></div></div>
+      <div class="card"><h2>Most wanted</h2><div class="bars" id="demand"></div></div>
+    </div>
+    <div class="card"><h2>Skill gaps</h2><p class="small muted">Students want these, but nobody offers them yet. A career office can fill them with workshops.</p><div class="gap-list" id="gaps"></div></div>
+  </section>
+
+  <!-- PLANS -->
+  <section class="view" id="v-plans" hidden>
+    <div class="hero"><h1>Swapping is free. Forever.</h1><p class="muted">Universities and companies pay for private communities. Students pay only for extras.</p></div>
+    <div class="plans">
+      <div class="plan"><span class="eyebrow">Student</span><div class="price">$0</div><ul><li>3 active swaps</li><li>2 starter credits</li><li>Matching and booking</li></ul></div>
+      <div class="plan"><span class="eyebrow">Plus</span><div class="price">$6.99 <small>/ month</small></div><ul><li>Unlimited swaps</li><li>Advanced filters and priority booking</li><li>Shareable portfolio of skills taught</li></ul><a class="btn primary" id="payLink" href="#" target="_blank" rel="noopener" hidden>Get Plus</a></div>
+      <div class="plan hot"><span class="eyebrow">University</span><div class="price">$6,000 <small>/ year</small></div><ul><li>Private campus community, free for every student</li><li>Campus impact dashboard and skill-gap reports</li><li>Alumni mentoring</li></ul></div>
+      <div class="plan"><span class="eyebrow">Company</span><div class="price">$3 <small>/ employee / mo</small></div><ul><li>Internal skill exchange between teams</li><li>Cross-team learning reports</li><li>Annual contract</li></ul></div>
+    </div>
+    <div class="card"><h2>Credit packs</h2><p class="small muted">Can't teach yet? Buy credits to book help now. Credits are only for SkillSwap and can't be cashed out.</p><div class="row"><span class="chip">1 credit · $8</span><span class="chip">5 credits · $35</span></div></div>
+  </section>
+
+  <footer>SkillSwap · Credits are platform-only and have no cash value.</footer>
+</main>
+
+<dialog id="bookDlg" aria-labelledby="bookTitle">
+  <form class="dlg" method="dialog" id="bookForm">
+    <h2 id="bookTitle">Book a session</h2>
+    <div><label class="l" for="bSkill">Skill</label><select class="field" id="bSkill"></select></div>
+    <div><span class="l">Length</span><div class="stepper"><button type="button" id="hMinus" aria-label="Fewer hours">−</button><span id="hN" class="num">1 h</span><button type="button" id="hPlus" aria-label="More hours">+</button></div></div>
+    <div><label class="l" for="bNote">What do you want help with?</label><textarea id="bNote" maxlength="300" placeholder="I have a case interview Friday and want to practice structuring."></textarea></div>
+    <p class="small" id="bCost"></p>
+    <div class="row" style="justify-content:flex-end"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn primary" id="bSend" value="ok">Send request</button></div>
+  </form>
+</dialog>
+
+<dialog id="doneDlg" aria-labelledby="doneTitle">
+  <form class="dlg" method="dialog" id="doneForm">
+    <h2 id="doneTitle">How did it go?</h2>
+    <p class="small muted" id="doneSub"></p>
+    <div class="rate" id="rate" role="radiogroup" aria-label="Rating"></div>
+    <div><label class="l" for="dReview">Short review (optional)</label><textarea id="dReview" maxlength="240"></textarea></div>
+    <div class="row" style="justify-content:flex-end"><button class="btn" value="cancel" formnovalidate>Not yet</button><button class="btn primary" value="ok">Confirm and pay</button></div>
+  </form>
+</dialog>
+
+<dialog id="shareDlg" aria-labelledby="shareTitle">
+  <div class="dlg">
+    <h2 id="shareTitle">Scan to join SkillSwap</h2>
+    <div class="qrwrap"><div id="qr"></div></div>
+    <p class="share-url" id="shareUrl"></p>
+    <div class="row" style="justify-content:flex-end"><button class="btn" id="copyUrl">Copy link</button><button class="btn primary" id="closeShare">Done</button></div>
+  </div>
+</dialog>
+
+<dialog id="codeDlg" aria-labelledby="codeTitle">
+  <form class="dlg" method="dialog" id="codeForm">
+    <h2 id="codeTitle">Log in with your code</h2>
+    <p class="small muted">Find it under Profile on the device where you joined.</p>
+    <input class="field" id="codeIn" maxlength="12" autocomplete="one-time-code" aria-label="Login code" style="font-family:var(--mono);letter-spacing:.15em;text-transform:uppercase">
+    <p class="err" id="codeErr" role="alert"></p>
+    <div class="row" style="justify-content:flex-end"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="ok">Log in</button></div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+const PAY_LINK = "";   // set to a Stripe Payment Link to sell Plus
+const EXAMPLES = [
+  { id: "ex1", name: "Maya", major: "Integrated Design & Media", headline: "Brand designer", teaches: ["logo design", "figma"], wants: ["python"] },
+  { id: "ex2", name: "Dev", major: "Computer Science", headline: "Backend dev, bad at slides", teaches: ["python", "sql"], wants: ["photography", "public speaking"] },
+  { id: "ex3", name: "Lena", major: "Film & TV", headline: "Shoots campus events", teaches: ["photography", "video editing"], wants: ["logo design"] },
+  { id: "ex4", name: "Omar", major: "Finance", headline: "Ex-banking intern", teaches: ["excel", "case interviews"], wants: ["figma"] },
+];
+const SUGGEST = ["Excel", "Python", "Figma", "Public speaking", "Interview prep", "Resume review", "SQL", "Photography", "Video editing", "Spanish", "Data analysis", "Pitch decks"];
+
+const $ = (id) => document.getElementById(id);
+const el = (tag, props = {}, ...kids) => { const e = document.createElement(tag); Object.assign(e, props); e.append(...kids.filter((k) => k != null && k !== false)); return e; };
+const norm = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+const title = (s) => String(s).replace(/\b\w/g, (c) => c.toUpperCase());
+const initials = (n) => String(n || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("");
+const hue = (id) => { let h = 0; for (const c of String(id)) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+const tokenStore = { get() { try { return localStorage.getItem("ss:token") || ""; } catch { return ""; } }, set(t) { try { t ? localStorage.setItem("ss:token", t) : localStorage.removeItem("ss:token"); } catch {} } };
+function toast(t) { $("toast").textContent = t; $("toast").hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => ($("toast").hidden = true), 2600); }
+
+let S = null, view = "market", skillFilter = "", bookFor = null, hours = 1, doneFor = null, rating = 5;
+
+async function api(path, method = "GET", body) {
+  const r = await fetch(path, { method, headers: { "content-type": "application/json", authorization: "Bearer " + tokenStore.get() }, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || "Something went wrong.");
+  return j;
+}
+async function refresh() {
+  try { S = await api("/api/state"); $("offline").hidden = true; render(); }
+  catch { $("offline").hidden = false; }
+}
+
+// ---------- navigation ----------
+function show(v) {
+  view = v;
+  document.querySelectorAll("#tabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.v === v));
+  for (const s of ["join", "market", "sessions", "profile", "campus", "plans"]) $("v-" + s).hidden = s !== v;
+  scrollTo({ top: 0 });
+  render();
+}
+document.querySelectorAll("#tabs button").forEach((b) => b.addEventListener("click", () => show(b.dataset.v)));
+$("walletBtn").onclick = () => show("profile");
+if (PAY_LINK) { $("payLink").href = PAY_LINK; $("payLink").hidden = false; }
+
+// ---------- helpers on state ----------
+const byId = (id) => S?.members.find((p) => p.id === id) || EXAMPLES.find((p) => p.id === id);
+const nameOf = (id) => byId(id)?.name || "Someone";
+const teachesAny = (p, list) => p.teaches.filter((t) => list.includes(t));
+function findLoop(me, pool) {
+  if (!me?.wants.length) return null;
+  for (const b of pool) { if (b.id === me.id) continue; const ab = teachesAny(b, me.wants)[0]; if (!ab) continue;
+    for (const c of pool) { if (c.id === me.id || c.id === b.id) continue; const bc = teachesAny(c, b.wants)[0]; if (!bc) continue;
+      const ca = teachesAny(me, c.wants)[0]; if (!ca || teachesAny(me, b.wants).length) continue; return { b, c, ab, bc, ca }; } }
+  return null;
+}
+
+// ---------- render ----------
+function render() {
+  if (!S) return;
+  const me = S.me;
+  $("tabs").hidden = !me; $("walletBtn").hidden = !me;
+  if (!me && view !== "join") { view = "join"; return show("join"); }
+  if (me && view === "join") { view = "market"; return show("market"); }
+  if (me) {
+    $("walletN").textContent = S.wallet.balance;
+    const pending = S.sessions.filter((s) => (s.teacher === me.id && s.status === "requested") || (s.learner === me.id && s.status === "accepted")).length;
+    $("sessDot").hidden = !pending; $("sessDot").textContent = pending;
+  }
+  ({ join: renderJoin, market: renderMarket, sessions: renderSessions, profile: renderProfile, campus: renderCampus, plans: () => {} })[view]();
+}
+
+function renderJoin() {
+  const n = S.members.length;
+  $("liveCount").textContent = n ? `${n} ${n === 1 ? "person has" : "people have"} joined` : "Be the first to join";
+  $("joinCount").textContent = n ? `${n} members` : "";
+  const list = n ? S.members.slice(0, 6) : EXAMPLES;
+  $("previewPeople").replaceChildren(...list.map((p) => personCard(p, null, true)));
+  document.querySelectorAll(".suggest").forEach((box) => {
+    if (box.childElementCount) return;
+    box.append(...SUGGEST.slice(0, 8).map((s) => { const b = el("button", { type: "button", textContent: "+ " + s });
+      b.onclick = () => { const inp = $(box.dataset.for); const cur = inp.value.split(",").map((x) => x.trim()).filter(Boolean);
+        if (!cur.map(norm).includes(norm(s))) cur.push(s); inp.value = cur.join(", "); }; return b; }));
+  });
+}
+
+function renderMarket() {
+  const me = S.me;
+  $("hello").textContent = `Hi ${me.name.split(" ")[0]}, what do you want to learn?`;
+  const real = S.members.filter((p) => p.id !== me.id);
+  const useEx = S.members.length < 4;
+  const pool = useEx ? [...real, ...EXAMPLES] : real;
+  const loop = findLoop(me, useEx ? [me, ...real, ...EXAMPLES] : S.members);
+  $("loopBox").replaceChildren(...(loop ? [el("div", { className: "loop" },
+    el("span", { className: "eyebrow", textContent: "3-way swap found" }),
+    el("div", { className: "loop-chain" },
+      el("span", { textContent: `${loop.b.name} teaches you ${title(loop.ab)}` }), el("span", { className: "arrow", textContent: "→" }),
+      el("span", { textContent: `${loop.c.name} teaches ${loop.b.name} ${title(loop.bc)}` }), el("span", { className: "arrow", textContent: "→" }),
+      el("span", { textContent: `you teach ${loop.c.name} ${title(loop.ca)}` })),
+    el("p", { className: "small muted", textContent: "Nobody here could trade one-to-one. Credits make it work." }))] : []));
+  const counts = {}; for (const p of pool) for (const t of p.teaches) counts[t] = (counts[t] || 0) + 1;
+  $("skillChips").replaceChildren(...Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([s]) => {
+    const b = el("button", { className: "chip", textContent: title(s) }); b.setAttribute("aria-pressed", skillFilter === s);
+    b.onclick = () => { skillFilter = skillFilter === s ? "" : s; $("q").value = ""; renderMarket(); }; return b; }));
+  const q = norm($("q").value) || skillFilter;
+  let list = pool.filter((p) => !q || [p.name, p.major, p.headline, ...p.teaches].some((x) => norm(x).includes(q)))
+    .map((p) => ({ p, hits: teachesAny(p, me.wants).length, mutual: teachesAny(me, p.wants).length }))
+    .sort((a, b) => (b.hits && b.mutual) - (a.hits && a.mutual) || b.hits - a.hits || (a.p.id.startsWith("ex") - b.p.id.startsWith("ex")));
+  $("marketTitle").textContent = q ? `Teaching "${title(q)}"` : "Best matches for you";
+  $("marketCount").textContent = `${list.length} ${list.length === 1 ? "person" : "people"}`;
+  $("people").replaceChildren(...(list.length ? list.map(({ p, hits, mutual }) => personCard(p, hits && mutual)) :
+    [el("div", { className: "empty", textContent: "Nobody teaches that yet. It shows up as a skill gap on the Campus page." })]));
+}
+
+function personCard(p, isSwap, preview) {
+  const ex = p.id.startsWith("ex"), st = S?.stats[p.id] || { taught: 0, avg: null }, wants = S?.me?.wants || [];
+  const av = el("span", { className: "avatar", textContent: initials(p.name) }); av.style.background = `hsl(${hue(p.id)} 45% 38%)`;
+  const head = el("div", { className: "p-head" }, av,
+    el("div", {}, el("b", { textContent: p.name }), el("span", { textContent: [p.major, p.headline].filter(Boolean).join(" · ") })),
+    ex ? el("span", { className: "tag ex", textContent: "Example" }) : isSwap ? el("span", { className: "tag swap", textContent: "Direct swap" }) : null);
+  const teach = el("div", { className: "chips" }, ...p.teaches.map((t) => el("span", { className: "chip teach" + (wants.includes(t) ? " hit" : ""), textContent: title(t) })));
+  const want = p.wants.length ? el("div", { className: "chips" }, el("span", { className: "small muted", textContent: "Wants:" }), ...p.wants.map((t) => el("span", { className: "chip want", textContent: title(t) }))) : null;
+  const meta = el("div", { className: "p-meta" }, el("span", { textContent: `${st.taught} ${st.taught === 1 ? "session" : "sessions"} taught` }),
+    st.avg ? el("span", { className: "stars", textContent: "★".repeat(Math.round(st.avg)) + " " + st.avg.toFixed(1) }) : el("span", { textContent: "New" }));
+  const card = el("article", { className: "person" + (ex ? " example" : "") }, head, teach, want, meta);
+  if (!preview) { const b = el("button", { className: "btn primary", textContent: ex ? "Example profile" : "Book a session" }); b.disabled = ex; b.onclick = () => openBook(p); card.append(b); }
+  return card;
+}
+
+function sessRow(s, role) {
+  const other = role === "teacher" ? s.learner : s.teacher;
+  const who = el("div", { className: "who" }, el("b", { textContent: `${title(s.skill)} · ${s.hours} h` }),
+    el("div", { className: "small muted", textContent: (role === "teacher" ? "Learner: " : "Teacher: ") + nameOf(other) }),
+    s.note ? el("div", { className: "small", textContent: "“" + s.note + "”" }) : null,
+    s.review ? el("div", { className: "small muted", textContent: "★".repeat(s.rating || 0) + " " + s.review }) : null);
+  const acts = el("div", { className: "sess-actions" });
+  const act = (label, cls, fn) => { const b = el("button", { className: "btn " + cls, textContent: label }); b.onclick = fn; acts.append(b); };
+  if (role === "teacher" && s.status === "requested") { act("Accept", "primary", () => doAct(s, "accept", "Accepted. You'll earn credits when it's done.")); act("Decline", "danger", () => doAct(s, "decline", "Declined. Their credits are returned.")); }
+  if (role === "learner" && s.status === "requested") act("Cancel request", "danger", () => doAct(s, "cancel", "Cancelled. Your credits are back."));
+  if (role === "learner" && s.status === "accepted") { act("Mark as done", "primary", () => openDone(s)); act("Cancel", "danger", () => doAct(s, "cancel", "Cancelled. Your credits are back.")); }
+  if (role === "teacher" && s.status === "accepted") acts.append(el("span", { className: "small muted", textContent: "You'll earn credits when the learner confirms." }));
+  const label = { requested: "Waiting", accepted: "Booked", completed: "Done", declined: "Declined", cancelled: "Cancelled" }[s.status];
+  return el("div", { className: "sess" }, who, el("span", { className: "status s-" + s.status, textContent: label }), acts.childNodes.length ? acts : null);
+}
+function renderSessions() {
+  const order = { requested: 0, accepted: 1, completed: 2, declined: 3, cancelled: 4 }, me = S.me.id;
+  const sort = (a, b) => order[a.status] - order[b.status] || b.created.localeCompare(a.created);
+  const inc = S.sessions.filter((s) => s.teacher === me).sort(sort), out = S.sessions.filter((s) => s.learner === me).sort(sort);
+  $("incoming").replaceChildren(...(inc.length ? inc.map((s) => sessRow(s, "teacher")) : [el("div", { className: "empty", textContent: "No requests yet. Share SkillSwap so more people find you." })]));
+  $("outgoing").replaceChildren(...(out.length ? out.map((s) => sessRow(s, "learner")) : [el("div", { className: "empty", textContent: "Book someone from the Market to start learning." })]));
+}
+function renderProfile() {
+  const me = S.me, w = S.wallet;
+  if (!document.activeElement?.closest("#profileForm")) {
+    $("pName").value = me.name; $("pMajor").value = me.major; $("pHeadline").value = me.headline;
+    $("pTeach").value = me.teaches.map(title).join(", "); $("pWant").value = me.wants.map(title).join(", ");
+  }
+  $("balN").textContent = w.balance; $("heldN").textContent = w.held; $("myCode").textContent = me.code;
+  $("ledger").replaceChildren(...w.rows.map((r) => el("tr", {}, el("td", { textContent: r.label }),
+    el("td", { className: r.amt >= 0 ? "plus" : "minus", textContent: (r.amt >= 0 ? "+" : "−") + Math.abs(r.amt) }))));
+}
+function bars(id, entries, cls) {
+  const max = Math.max(1, ...entries.map((e) => e[1]));
+  $(id).replaceChildren(...(entries.length ? entries.map(([k, n]) => { const f = el("div", { className: "bar-fill " + (cls || "") }); f.style.width = (n / max) * 100 + "%";
+    return el("div", { className: "bar" }, el("span", { className: "bar-name", textContent: title(k) }), el("div", { className: "bar-track" }, f), el("span", { className: "bar-n", textContent: n })); })
+    : [el("div", { className: "empty", textContent: "Appears as people join." })]));
+}
+function renderCampus() {
+  const c = S.campus;
+  $("cMembers").textContent = c.members; $("cSessions").textContent = c.swaps; $("cHours").textContent = c.hours;
+  $("cCross").textContent = c.cross == null ? "–" : c.cross + "%"; $("cRating").textContent = c.rating == null ? "–" : c.rating + "★";
+  bars("supply", c.supply); bars("demand", c.demand, "want");
+  $("gaps").replaceChildren(...(c.gaps.length ? c.gaps.map(([g, n]) => el("span", { className: "chip want", textContent: `${title(g)} · ${n} want it` })) : [el("span", { className: "small muted", textContent: "No gaps right now." })]));
+}
+
+// ---------- actions ----------
+$("joinForm").addEventListener("submit", async (e) => {
+  e.preventDefault(); $("joinErr").textContent = ""; $("joinBtn").disabled = true;
+  try {
+    const r = await api("/api/join", "POST", { name: $("jName").value, major: $("jMajor").value, teaches: $("jTeach").value, wants: $("jWant").value });
+    tokenStore.set(r.token); await refresh(); toast("Welcome! You have 2 credits to spend."); show("market");
+  } catch (err) { $("joinErr").textContent = err.message; }
+  $("joinBtn").disabled = false;
+});
+$("haveCode").onclick = () => { $("codeErr").textContent = ""; $("codeIn").value = ""; $("codeDlg").showModal(); };
+$("codeForm").addEventListener("submit", async (e) => {
+  if (e.submitter?.value !== "ok") return;
+  e.preventDefault();
+  try { const r = await api("/api/login", "POST", { code: $("codeIn").value }); tokenStore.set(r.token); $("codeDlg").close(); await refresh(); toast("Logged in."); }
+  catch (err) { $("codeErr").textContent = err.message; }
+});
+$("logoutBtn").onclick = () => { tokenStore.set(""); S.me = null; toast("Logged out. Your code logs you back in."); refresh(); };
+$("profileForm").addEventListener("submit", async (e) => {
+  e.preventDefault(); $("saveBtn").disabled = true;
+  try { await api("/api/profile", "PUT", { name: $("pName").value, major: $("pMajor").value, headline: $("pHeadline").value, teaches: $("pTeach").value, wants: $("pWant").value });
+    $("saveMsg").textContent = "Saved."; document.activeElement.blur(); await refresh(); }
+  catch (err) { $("saveMsg").textContent = err.message; }
+  $("saveBtn").disabled = false;
+});
+async function doAct(s, action, msg, body) {
+  try { await api(`/api/sessions/${s.id}/${action}`, "POST", body || {}); toast(msg); await refresh(); }
+  catch (err) { toast(err.message); }
+}
+function openBook(p) {
+  bookFor = p; hours = 1; $("bookTitle").textContent = `Book ${p.name}`;
+  const sorted = [...p.teaches].sort((a, b) => S.me.wants.includes(b) - S.me.wants.includes(a));
+  $("bSkill").replaceChildren(...sorted.map((t) => el("option", { value: t, textContent: title(t) })));
+  $("bNote").value = ""; updateCost(); $("bookDlg").showModal();
+}
+function updateCost() {
+  const bal = S.wallet.balance, cap = S.rules.freeActive;
+  const active = S.sessions.filter((s) => s.learner === S.me.id && (s.status === "requested" || s.status === "accepted")).length;
+  $("hN").textContent = hours + " h";
+  $("bCost").textContent = bal < hours ? `This costs ${hours} credit${hours > 1 ? "s" : ""} and you have ${bal}. Teach a session to earn more.`
+    : active >= cap ? `Free accounts can have ${cap} active swaps. Finish one first.`
+    : `Costs ${hours} credit${hours > 1 ? "s" : ""}. You'll have ${bal - hours} left. Held until the session is done.`;
+  $("bSend").disabled = bal < hours || active >= cap;
+}
+$("hMinus").onclick = () => { hours = Math.max(1, hours - 1); updateCost(); };
+$("hPlus").onclick = () => { hours = Math.min(S.rules.maxHours, hours + 1); updateCost(); };
+$("bookForm").addEventListener("submit", async (e) => {
+  if (e.submitter?.value !== "ok" || !bookFor) return;
+  try { await api("/api/sessions", "POST", { teacher: bookFor.id, skill: $("bSkill").value, hours, note: $("bNote").value });
+    toast(`Request sent to ${bookFor.name}`); await refresh(); show("sessions"); }
+  catch (err) { toast(err.message); }
+});
+function openDone(s) {
+  doneFor = s; rating = 5; $("dReview").value = "";
+  $("doneSub").textContent = `${title(s.skill)} with ${nameOf(s.teacher)}. Confirming pays them ${s.hours} credit${s.hours > 1 ? "s" : ""}.`;
+  drawRate(); $("doneDlg").showModal();
+}
+function drawRate() {
+  $("rate").replaceChildren(...[1, 2, 3, 4, 5].map((n) => { const b = el("button", { type: "button", className: n <= rating ? "on" : "", textContent: "★" });
+    b.setAttribute("aria-label", n + " stars"); b.setAttribute("role", "radio"); b.setAttribute("aria-checked", n === rating); b.onclick = () => { rating = n; drawRate(); }; return b; }));
+}
+$("doneForm").addEventListener("submit", (e) => {
+  if (e.submitter?.value !== "ok" || !doneFor) return;
+  doAct(doneFor, "complete", `Paid ${nameOf(doneFor.teacher)} ${doneFor.hours} credit${doneFor.hours > 1 ? "s" : ""}. Thanks!`, { rating, review: $("dReview").value });
+});
+$("buyBtn").onclick = () => { show("plans"); toast("Credit packs launch with payments. Teach a session to earn now."); };
+$("q").addEventListener("input", () => { skillFilter = ""; renderMarket(); });
+
+// ---------- share ----------
+$("shareBtn").onclick = () => {
+  const url = location.origin; $("shareUrl").textContent = url; $("qr").replaceChildren();
+  if (window.QRCode) new QRCode($("qr"), { text: url, width: 220, height: 220, colorDark: "#10221c", colorLight: "#ffffff" });
+  else $("qr").textContent = "QR unavailable offline";
+  $("shareDlg").showModal();
+};
+$("closeShare").onclick = () => $("shareDlg").close();
+$("copyUrl").onclick = async () => { try { await navigator.clipboard.writeText(location.origin); toast("Link copied"); } catch { toast(location.origin); } };
+
+// ---------- boot ----------
+refresh();
+setInterval(() => { if (!document.hidden && !document.querySelector("dialog[open]")) refresh(); }, 5000);
+</script>
+</body>
+</html>
