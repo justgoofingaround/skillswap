@@ -1,7 +1,8 @@
-"""SkillSwap API. Runs as a Vercel Python function (class `handler`) and locally via ../server.py.
+"""SkillSwap API. Runs as a Vercel Python function (class `handler`) and locally via ../run_local.py.
 
 Database: Postgres when DATABASE_URL (or POSTGRES_URL) is set, otherwise a local SQLite file.
-All credit rules are enforced here, not in the browser.
+AI matching: Claude when ANTHROPIC_API_KEY is set, otherwise a labeled keyword fallback.
+All credit and booking rules are enforced here, not in the browser.
 """
 import json
 import os
@@ -9,21 +10,25 @@ import re
 import secrets
 import sqlite3
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or ""
 PG = DATABASE_URL.startswith("postgres")
 SQLITE_PATH = os.environ.get("DB_PATH", str(Path(__file__).resolve().parent.parent / "skillswap.db"))
+AI_MODEL = "claude-opus-5-5"
 
 START_CREDITS = 2
 MAX_HOURS = 3
 PAIR_WEEKLY_CAP = 3
 FREE_ACTIVE = 3
 MAX_BODY = 16_000
+DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+BLOCKS = {"morning": "9am–12pm", "afternoon": "12–5pm", "evening": "5–9pm"}
+SLOT_KEYS = {f"{d}-{b}" for d in DAYS for b in BLOCKS}
 
-_join_hits = {}
+_hits = {}
 _ready = False
 
 SCHEMA = [
@@ -38,6 +43,10 @@ SCHEMA = [
       created TEXT NOT NULL, completed_at TEXT DEFAULT '')""",
     "CREATE INDEX IF NOT EXISTS s_learner ON sessions(learner)",
     "CREATE INDEX IF NOT EXISTS s_teacher ON sessions(teacher)",
+]
+MIGRATIONS = [  # columns added after the first release; each may already exist
+    "ALTER TABLE users ADD COLUMN availability TEXT DEFAULT '[]'",
+    "ALTER TABLE sessions ADD COLUMN slot TEXT DEFAULT ''",
 ]
 
 
@@ -85,7 +94,43 @@ def init_db():
     with DB() as d:
         for stmt in SCHEMA:
             d.run(stmt)
+    for stmt in MIGRATIONS:
+        try:
+            with DB() as d:
+                d.run(stmt)
+        except Exception:
+            pass  # column already exists
     _ready = True
+
+
+# ---------- time & slots (campus time: New York) ----------
+def campus_today():
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("America/New_York")).date()
+    except Exception:
+        return (datetime.now(timezone.utc) - timedelta(hours=5)).date()
+
+
+def upcoming_slots(availability, days=7, start=None):
+    """Concrete dates for a weekly availability list, soonest first: [{"slot": "2026-11-13|evening", ...}]."""
+    start = start or campus_today()
+    out = []
+    for i in range(days):
+        d = start + timedelta(days=i)
+        for b in BLOCKS:
+            if f"{DAYS[d.weekday()]}-{b}" in availability:
+                out.append({"slot": f"{d.isoformat()}|{b}", "date": d.isoformat(), "block": b})
+    return out
+
+
+def slot_label(slot):
+    try:
+        ds, b = slot.split("|")
+        d = date.fromisoformat(ds)
+        return f"{d.strftime('%a %b')} {d.day}, {b}"
+    except ValueError:
+        return "Flexible time"
 
 
 # ---------- helpers ----------
@@ -107,6 +152,11 @@ def skills(v):
     return out[:12]
 
 
+def availability(v):
+    items = v if isinstance(v, list) else []
+    return sorted({str(x) for x in items if str(x) in SLOT_KEYS})
+
+
 def week_key(iso):
     try:
         d = datetime.fromisoformat(iso)
@@ -117,8 +167,17 @@ def week_key(iso):
 
 
 def public_user(r):
-    return {"id": r["id"], "name": r["name"], "major": r["major"] or "", "headline": r["headline"] or "",
-            "teaches": json.loads(r["teaches"] or "[]"), "wants": json.loads(r["wants"] or "[]")}
+    return {"id": r["id"], "name": r["name"], "major": r.get("major") or "", "headline": r.get("headline") or "",
+            "teaches": json.loads(r.get("teaches") or "[]"), "wants": json.loads(r.get("wants") or "[]"),
+            "availability": json.loads(r.get("availability") or "[]")}
+
+
+def rate_limit(key, per_hour):
+    t = time.time()
+    hits = [h for h in _hits.get(key, []) if t - h < 3600]
+    if len(hits) >= per_hour:
+        raise ApiError(429, "Too many requests. Try again in a bit.")
+    _hits[key] = hits + [t]
 
 
 def ledger(uid, sessions, names):
@@ -180,6 +239,145 @@ def teacher_stats(sessions):
     return {k: {"taught": v["taught"], "avg": round(v["sum"] / v["n"], 1) if v["n"] else None} for k, v in st.items()}
 
 
+# ---------- AI: plain-English need -> skills ----------
+NEED_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "description": "What the student needs, in under 12 words"},
+        "explanation": {"type": "string", "description": "One or two sentences, plain English: what this skill is and why it solves their problem"},
+        "skills": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "The specific skill, e.g. 'pivot tables'"},
+                    "catalog_match": {"type": "string", "description": "The exact catalog skill that covers it, or empty string if none"},
+                    "keywords": {"type": "array", "items": {"type": "string"}, "description": "Lowercase words a teacher might list for this skill"},
+                },
+                "required": ["name", "catalog_match", "keywords"],
+                "additionalProperties": False,
+            },
+        },
+        "session_title": {"type": "string", "description": "A short title for the session, e.g. 'Weekly category summary with pivot tables'"},
+        "hours": {"type": "integer", "description": "Suggested session length, 1 to 3"},
+        "deadline_date": {"type": "string", "description": "Last useful date for the session as YYYY-MM-DD, or empty string if no deadline"},
+    },
+    "required": ["summary", "explanation", "skills", "session_title", "hours", "deadline_date"],
+    "additionalProperties": False,
+}
+
+
+def ai_interpret(need, catalog, today):
+    import anthropic
+
+    client = anthropic.Anthropic(timeout=25.0, max_retries=1)
+    prompt = (
+        "A university student on a peer skill-exchange platform described what they need help with. "
+        "They may not know the name of the skill. Work out the specific skill(s) that would solve it.\n\n"
+        f"Today is {today.strftime('%A, %Y-%m-%d')} (campus time, New York).\n"
+        f"Skills peers currently offer (the catalog): {json.dumps(sorted(catalog))}\n\n"
+        "Rules:\n"
+        "- Return 1 to 3 skills, most useful first. Be specific (\"pivot tables\", not \"computers\").\n"
+        "- catalog_match must be copied exactly from the catalog when a catalog skill covers the need "
+        "(for example pivot tables are covered by \"excel\"); otherwise an empty string.\n"
+        "- keywords: 3 to 6 lowercase words or short phrases a teacher might list for this skill.\n"
+        "- deadline_date: if they mention a deadline, the last date a session could still help. "
+        "\"Before Friday\" means the Thursday before that Friday. Empty string if none.\n"
+        "- hours: 1 unless the need clearly takes longer. Maximum 3.\n\n"
+        f"Student's words:\n\"\"\"{need}\"\"\""
+    )
+    resp = client.beta.messages.create(
+        model=AI_MODEL,
+        max_tokens=4000,
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
+        output_config={"effort": "low", "format": {"type": "json_schema", "schema": NEED_SCHEMA}},
+        messages=[{"role": "user", "content": prompt}],
+    )
+    if resp.stop_reason == "refusal":
+        raise RuntimeError("refused")
+    text = next(b.text for b in resp.content if b.type == "text")
+    return json.loads(text)
+
+
+SYNONYMS = {  # used only when the AI is unavailable
+    "spreadsheet": ["excel", "google sheets", "pivot tables"], "rows": ["excel", "pivot tables"], "pivot": ["excel", "pivot tables"],
+    "summary": ["excel", "pivot tables", "data analysis"], "chart": ["excel", "data analysis"], "slides": ["pitch decks", "public speaking"],
+    "presentation": ["public speaking", "pitch decks"], "resume": ["resume review"], "cv": ["resume review"], "interview": ["interview prep", "case interviews"],
+    "logo": ["logo design", "figma"], "website": ["web development", "figma"], "code": ["python"], "script": ["python"], "database": ["sql"],
+    "photo": ["photography"], "video": ["video editing"],
+}
+
+
+def keyword_interpret(need, catalog):
+    words = re.findall(r"[a-z]+", need.lower())
+    hits = []
+    for w in words:
+        for s in SYNONYMS.get(w, []) + [c for c in catalog if w in c.split() and len(w) > 3]:
+            if s not in hits:
+                hits.append(s)
+    skills_out = [{"name": s, "catalog_match": s if s in catalog else "", "keywords": [s]} for s in hits[:3]]
+    return {"summary": clean(need, 80), "explanation": "Matched on keywords in your request.", "skills": skills_out,
+            "session_title": clean(need, 60), "hours": 1, "deadline_date": ""}
+
+
+def score_teachers(plan, me, users, sessions, stats, today):
+    """Rank real peers for the interpreted need and explain every point of the score."""
+    try:
+        deadline = date.fromisoformat(plan.get("deadline_date") or "")
+    except ValueError:
+        deadline = None
+    horizon = max(7, (deadline - today).days + 1) if deadline and deadline >= today else 7
+    taken = {(s["teacher"], s.get("slot") or "") for s in sessions if s["status"] in ("requested", "accepted") and s.get("slot")}
+    mine = set(me["teaches"]) if me else set()
+    results = []
+    for u in users:
+        if me and u["id"] == me["id"]:
+            continue
+        score, reasons, matched = 0, [], None
+        for i, sk in enumerate(plan["skills"]):
+            cat, name = sk.get("catalog_match", "").lower(), sk["name"].lower()
+            if cat and cat in u["teaches"]:
+                matched = cat
+                score += 50 - i * 10
+                reasons.append({"kind": "skill", "text": f"Teaches {cat.title()}" + (f", which covers {name}" if name != cat else "")})
+                break
+            kw = [k.lower() for k in sk.get("keywords", [])] + [name]
+            hit = next((t for t in u["teaches"] if any(k in t or t in k for k in kw if len(k) > 2)), None)
+            if hit:
+                matched = hit
+                score += 35 - i * 10
+                reasons.append({"kind": "skill", "text": f"Teaches {hit.title()}, related to {name}"})
+                break
+        if not matched:
+            continue
+        open_slots = [s for s in upcoming_slots(u["availability"], days=horizon, start=today) if (u["id"], s["slot"]) not in taken]
+        before = [s for s in open_slots if not deadline or date.fromisoformat(s["date"]) <= deadline]
+        if before:
+            score += 20
+            first = slot_label(before[0]["slot"])
+            reasons.append({"kind": "time", "text": f"Free {first}" + (f", before your {(deadline + timedelta(days=1)).strftime('%A')} deadline" if deadline else "")})
+        elif open_slots:
+            score -= 15
+            reasons.append({"kind": "warn", "text": f"Next free {slot_label(open_slots[0]['slot'])}, after your deadline"})
+        else:
+            score -= 5
+            reasons.append({"kind": "warn", "text": "Hasn't set available times yet; you can request a flexible time"})
+        st = stats.get(u["id"])
+        if st and st["avg"]:
+            score += int(st["avg"] * 3)
+            reasons.append({"kind": "trust", "text": f"Rated {st['avg']}★ across {st['taught']} session{'s' if st['taught'] != 1 else ''}"})
+        else:
+            reasons.append({"kind": "trust", "text": "New to SkillSwap, no reviews yet"})
+        swap = next((w for w in u["wants"] if w in mine), None)
+        if swap:
+            score += 8
+            reasons.append({"kind": "swap", "text": f"Wants to learn {swap.title()}, which you teach, so you can help each other"})
+        results.append({"user": u, "skill": matched, "score": score, "reasons": reasons, "slots": (before or open_slots)[:4]})
+    results.sort(key=lambda r: -r["score"])
+    return results[:3]
+
+
 class ApiError(Exception):
     def __init__(self, status, msg):
         super().__init__(msg)
@@ -188,7 +386,7 @@ class ApiError(Exception):
 
 # ---------- HTTP ----------
 class handler(BaseHTTPRequestHandler):
-    server_version = "SkillSwap/1.1"
+    server_version = "SkillSwap/1.2"
 
     def log_message(self, fmt, *args):
         pass
@@ -245,6 +443,8 @@ class handler(BaseHTTPRequestHandler):
                     return self.send_json(200, self.login(d, self.body()))
                 if method == "PUT" and path == "/api/profile":
                     return self.send_json(200, self.profile(d, self.body()))
+                if method == "POST" and path == "/api/match":
+                    return self.send_json(200, self.match(d, self.body()))
                 if method == "POST" and path == "/api/sessions":
                     return self.send_json(200, self.book(d, self.body()))
                 m = re.fullmatch(r"/api/sessions/([A-Za-z0-9_-]{6,40})/(accept|decline|cancel|complete)", path)
@@ -263,7 +463,9 @@ class handler(BaseHTTPRequestHandler):
         users = [public_user(r) for r in d.all("SELECT * FROM users ORDER BY created DESC")]
         sessions = d.all("SELECT * FROM sessions")
         names = {u["id"]: u["name"] for u in users}
-        out = {"members": users, "stats": teacher_stats(sessions), "campus": campus(users, sessions),
+        taken = sorted({s["teacher"] + "#" + s["slot"] for s in sessions if s["status"] in ("requested", "accepted") and s.get("slot")})
+        out = {"members": users, "stats": teacher_stats(sessions), "campus": campus(users, sessions), "taken": taken,
+               "today": campus_today().isoformat(), "aiEnabled": bool(os.environ.get("ANTHROPIC_API_KEY")),
                "rules": {"start": START_CREDITS, "maxHours": MAX_HOURS, "pairCap": PAIR_WEEKLY_CAP, "freeActive": FREE_ACTIVE}}
         if me:
             mine = [s for s in sessions if me["id"] in (s["learner"], s["teacher"])]
@@ -273,23 +475,20 @@ class handler(BaseHTTPRequestHandler):
         return out
 
     def join(self, d, b):
-        ip, t = self.client_ip(), time.time()
-        hits = [h for h in _join_hits.get(ip, []) if t - h < 3600]
-        if len(hits) >= 30:
-            raise ApiError(429, "Too many sign-ups from this network. Try again later.")
-        _join_hits[ip] = hits + [t]
+        rate_limit("join:" + self.client_ip(), 30)
         name, teaches = clean(b.get("name"), 60), skills(b.get("teaches"))
         if not name:
             raise ApiError(400, "Add your name.")
         if not teaches:
             raise ApiError(400, "Add at least one skill you can teach.")
         uid, tok, code = "u_" + secrets.token_urlsafe(9), secrets.token_urlsafe(24), secrets.token_hex(3).upper()
-        d.run("INSERT INTO users (id, token, code, name, major, headline, teaches, wants, created) VALUES (?,?,?,?,?,?,?,?,?)",
+        d.run("INSERT INTO users (id, token, code, name, major, headline, teaches, wants, availability, created) VALUES (?,?,?,?,?,?,?,?,?,?)",
               (uid, tok, code, name, clean(b.get("major"), 60), clean(b.get("headline"), 100),
-               json.dumps(teaches), json.dumps(skills(b.get("wants"))), now()))
+               json.dumps(teaches), json.dumps(skills(b.get("wants"))), json.dumps(availability(b.get("availability"))), now()))
         return {"token": tok}
 
     def login(self, d, b):
+        rate_limit("login:" + self.client_ip(), 60)
         code = clean(b.get("code"), 12).upper()
         row = d.one("SELECT token FROM users WHERE code = ?", (code,)) if code else None
         if not row:
@@ -301,10 +500,38 @@ class handler(BaseHTTPRequestHandler):
         name, teaches = clean(b.get("name"), 60), skills(b.get("teaches"))
         if not name or not teaches:
             raise ApiError(400, "Name and at least one teachable skill are required.")
-        d.run("UPDATE users SET name=?, major=?, headline=?, teaches=?, wants=? WHERE id=?",
-              (name, clean(b.get("major"), 60), clean(b.get("headline"), 100),
-               json.dumps(teaches), json.dumps(skills(b.get("wants"))), me["id"]))
+        d.run("UPDATE users SET name=?, major=?, headline=?, teaches=?, wants=?, availability=? WHERE id=?",
+              (name, clean(b.get("major"), 60), clean(b.get("headline"), 100), json.dumps(teaches),
+               json.dumps(skills(b.get("wants"))), json.dumps(availability(b.get("availability"))), me["id"]))
         return {"ok": True}
+
+    def match(self, d, b):
+        me_row = self.me(d)
+        rate_limit("match:" + me_row["id"], 40)
+        need = clean(b.get("need"), 500)
+        if len(need) < 8:
+            raise ApiError(400, "Tell us a bit more about what you need.")
+        users = [public_user(r) for r in d.all("SELECT * FROM users")]
+        sessions = d.all("SELECT * FROM sessions")
+        catalog = sorted({t for u in users for t in u["teaches"] if u["id"] != me_row["id"]})
+        today = campus_today()
+        source = "ai"
+        try:
+            if not os.environ.get("ANTHROPIC_API_KEY"):
+                raise RuntimeError("no key")
+            plan = ai_interpret(need, catalog, today)
+        except Exception as e:
+            print("AI fallback:", repr(e))
+            plan, source = keyword_interpret(need, catalog), "keywords"
+        plan["skills"] = [s for s in plan.get("skills", []) if s.get("name")][:3]
+        plan["hours"] = max(1, min(MAX_HOURS, int(plan.get("hours") or 1)))
+        me = public_user(me_row)
+        matches = score_teachers(plan, me, users, sessions, teacher_stats(sessions), today)
+        for m in matches:
+            for s in m["slots"]:
+                s["label"] = slot_label(s["slot"])
+        return {"source": source, "plan": plan, "matches": matches, "need": need,
+                "deadline_label": (date.fromisoformat(plan["deadline_date"]).strftime("%a %b %-d") if plan.get("deadline_date") else "")}
 
     def book(self, d, b):
         me = self.me(d)
@@ -323,6 +550,14 @@ class handler(BaseHTTPRequestHandler):
             hours = 1
         if not 1 <= hours <= MAX_HOURS:
             raise ApiError(400, f"Sessions are 1 to {MAX_HOURS} hours.")
+        slot = clean(b.get("slot"), 30)
+        if slot:
+            valid = {s["slot"] for s in upcoming_slots(json.loads(teacher.get("availability") or "[]"), days=21)}
+            if slot not in valid:
+                raise ApiError(400, f"{teacher['name']} isn't available then. Pick another time.")
+            clash = d.one("SELECT id FROM sessions WHERE teacher = ? AND slot = ? AND status IN ('requested','accepted')", (teacher["id"], slot))
+            if clash:
+                raise ApiError(409, "Someone just booked that time. Pick another.")
         sessions = d.all("SELECT * FROM sessions WHERE learner = ? OR teacher = ?", (me["id"], me["id"]))
         active = sum(1 for s in sessions if s["learner"] == me["id"] and s["status"] in ("requested", "accepted"))
         if active >= FREE_ACTIVE:
@@ -331,8 +566,8 @@ class handler(BaseHTTPRequestHandler):
         if bal < hours:
             raise ApiError(402, f"This costs {hours} credit{'s' if hours > 1 else ''} and you have {bal}. Teach a session to earn more.")
         sid = "s_" + secrets.token_urlsafe(9)
-        d.run("INSERT INTO sessions (id, learner, teacher, skill, hours, note, status, created) VALUES (?,?,?,?,?,?,?,?)",
-              (sid, me["id"], teacher["id"], skill, hours, clean(b.get("note"), 300), "requested", now()))
+        d.run("INSERT INTO sessions (id, learner, teacher, skill, hours, note, status, created, slot) VALUES (?,?,?,?,?,?,?,?,?)",
+              (sid, me["id"], teacher["id"], skill, hours, clean(b.get("note"), 300), "requested", now(), slot))
         return {"ok": True, "id": sid}
 
     def act(self, d, sid, action, b):

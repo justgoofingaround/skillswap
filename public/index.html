@@ -31,6 +31,35 @@
   .code { font: 700 22px var(--mono); letter-spacing: 0.15em; background: var(--sunken); border: 1px dashed var(--line); border-radius: 10px; padding: 8px 14px; text-align: center; }
   .linkbtn { border: 0; background: none; color: var(--accent); font-weight: 600; cursor: pointer; padding: 6px 0; min-height: 36px; }
   .share-url { word-break: break-all; font: 500 13px var(--mono); text-align: center; }
+  /* AI need matcher */
+  .need { background: var(--surface); border: 2px solid var(--accent); border-radius: 18px; padding: 16px; display: flex; flex-direction: column; gap: 10px; box-shadow: var(--shadow); }
+  .need-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .ai-badge { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 3px 9px; }
+  .need textarea { min-height: 76px; }
+  .try { border: 1px dashed var(--line); background: var(--sunken); border-radius: 10px; padding: 8px 10px; text-align: left; font-size: 13px; cursor: pointer; color: var(--muted); }
+  .try:hover { border-color: var(--accent); color: var(--ink); }
+  .plan-box { background: var(--accent-soft); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+  .plan-box b { font-family: var(--display); font-size: 17px; }
+  .match { border: 1px solid var(--line); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 10px; background: var(--surface); }
+  .match.best { border: 2px solid var(--coin); }
+  .why { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; font-size: 13.5px; }
+  .why li { display: grid; grid-template-columns: 20px 1fr; gap: 6px; align-items: start; }
+  .why li::before { content: "✓"; font-weight: 700; color: var(--accent); }
+  .why li.warn::before { content: "!"; color: var(--warn); }
+  .why li.swap::before { content: "⇄"; color: var(--coin); }
+  .why li.trust::before { content: "★"; color: var(--coin); }
+  .slots { display: flex; flex-wrap: wrap; gap: 6px; }
+  .slotbtn { border: 1px solid var(--accent); background: var(--surface); color: var(--accent); border-radius: 10px; padding: 7px 11px; font-weight: 600; font-size: 13px; cursor: pointer; min-height: 38px; }
+  .slotbtn:hover { background: var(--accent); color: var(--accent-ink); }
+  .thinking { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 14px; }
+  .spin { width: 16px; height: 16px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  /* availability grid */
+  .avail { display: grid; grid-template-columns: 74px repeat(7, 1fr); gap: 4px; font-size: 11.5px; overflow-x: auto; }
+  .avail span { color: var(--muted); text-align: center; font-weight: 600; align-self: center; }
+  .avail span.rowlabel { text-align: left; }
+  .avail button { border: 1px solid var(--line); background: var(--sunken); border-radius: 7px; min-height: 30px; min-width: 30px; cursor: pointer; font-size: 11px; }
+  .avail button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
   @media (max-width: 760px) { .welcome { grid-template-columns: 1fr; } .welcome h1 { font-size: 30px; } }
 </style>
 </head>
@@ -74,6 +103,7 @@
           <div class="suggest" data-for="jTeach"></div></div>
         <div><label class="l" for="jWant">I want to learn</label><input class="field" id="jWant" maxlength="200" placeholder="Python, interview prep">
           <div class="suggest" data-for="jWant"></div></div>
+        <div><span class="l">When can you teach? (tap to select)</span><div class="avail" id="jAvail"></div></div>
         <p class="err" id="joinErr" role="alert"></p>
         <button class="btn primary" type="submit" id="joinBtn">Join and get 2 credits</button>
         <p class="small muted">Already joined on another device? <button type="button" class="linkbtn" id="haveCode">Use your login code</button></p>
@@ -88,6 +118,14 @@
       <h1 id="hello">Teach what you know. Learn what you don't.</h1>
       <p class="muted">Teach for an hour, earn a credit. Spend it with anyone.</p>
     </div>
+    <form class="need" id="needForm">
+      <div class="need-head"><h2><label for="needIn">Tell us what you need help with</label></h2><span class="ai-badge" id="aiBadge">AI match</span></div>
+      <p class="small muted">Describe the problem in your own words. You don't need to know what the skill is called.</p>
+      <textarea class="field" id="needIn" maxlength="500" placeholder="My spreadsheet has thousands of rows and I need a weekly summary by category before Friday."></textarea>
+      <button type="button" class="try" id="tryNeed">Try: “My spreadsheet has thousands of rows and I need a weekly summary by category before Friday.”</button>
+      <button class="btn primary" type="submit" id="needBtn">Find someone who can help</button>
+    </form>
+    <div id="needOut"></div>
     <div id="loopBox"></div>
     <div class="search"><input class="field" id="q" type="search" placeholder="Search a skill: Excel, Figma, Python, interview prep…" aria-label="Search skills or people"></div>
     <div class="chips" id="skillChips" aria-label="Popular skills"></div>
@@ -114,6 +152,7 @@
         <div><label class="l" for="pHeadline">One line about you</label><input class="field" id="pHeadline" maxlength="100" placeholder="Designer who wants to learn to code"></div>
         <div><label class="l" for="pTeach">I can teach (comma separated)</label><input class="field" id="pTeach" maxlength="200"></div>
         <div><label class="l" for="pWant">I want to learn (comma separated)</label><input class="field" id="pWant" maxlength="200"></div>
+        <div><span class="l">When can you teach? (repeats weekly)</span><div class="avail" id="pAvail"></div></div>
         <div class="row"><button class="btn primary" type="submit" id="saveBtn">Save profile</button><span class="small muted" id="saveMsg" role="status"></span></div>
       </form>
       <div class="card">
@@ -168,6 +207,7 @@
   <form class="dlg" method="dialog" id="bookForm">
     <h2 id="bookTitle">Book a session</h2>
     <div><label class="l" for="bSkill">Skill</label><select class="field" id="bSkill"></select></div>
+    <div><label class="l" for="bSlot">When</label><select class="field" id="bSlot"></select></div>
     <div><span class="l">Length</span><div class="stepper"><button type="button" id="hMinus" aria-label="Fewer hours">−</button><span id="hN" class="num">1 h</span><button type="button" id="hPlus" aria-label="More hours">+</button></div></div>
     <div><label class="l" for="bNote">What do you want help with?</label><textarea id="bNote" maxlength="300" placeholder="I have a case interview Friday and want to practice structuring."></textarea></div>
     <p class="small" id="bCost"></p>
@@ -224,6 +264,39 @@ const title = (s) => String(s).replace(/\b\w/g, (c) => c.toUpperCase());
 const initials = (n) => String(n || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("");
 const hue = (id) => { let h = 0; for (const c of String(id)) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
 const tokenStore = { get() { try { return localStorage.getItem("ss:token") || ""; } catch { return ""; } }, set(t) { try { t ? localStorage.setItem("ss:token", t) : localStorage.removeItem("ss:token"); } catch {} } };
+// ---------- availability ----------
+const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], BLOCKS = ["morning", "afternoon", "evening"];
+const BLOCK_HINT = { morning: "9–12", afternoon: "12–5", evening: "5–9" };
+function drawAvail(id, selected) {
+  const box = $(id), sel = new Set(selected || []);
+  box.replaceChildren(el("span"), ...DAYS.map((d) => el("span", { textContent: d[0].toUpperCase() + d.slice(1, 3) })));
+  for (const b of BLOCKS) {
+    box.append(el("span", { className: "rowlabel", textContent: `${b[0].toUpperCase() + b.slice(1)} ${BLOCK_HINT[b]}` }));
+    for (const d of DAYS) {
+      const k = `${d}-${b}`, btn = el("button", { type: "button", textContent: sel.has(k) ? "✓" : "" });
+      btn.dataset.k = k; btn.setAttribute("aria-pressed", sel.has(k)); btn.setAttribute("aria-label", `${d} ${b}`);
+      btn.onclick = () => { const on = btn.getAttribute("aria-pressed") !== "true"; btn.setAttribute("aria-pressed", on); btn.textContent = on ? "✓" : ""; };
+      box.append(btn);
+    }
+  }
+}
+const getAvail = (id) => [...$(id).querySelectorAll("button[aria-pressed='true']")].map((b) => b.dataset.k);
+function upcoming(avail, teacherId, days = 7) {
+  const [y, m, d] = (S?.today || new Date().toISOString().slice(0, 10)).split("-").map(Number), out = [];
+  const taken = new Set(S?.taken || []);
+  for (let i = 0; i < days; i++) {
+    const dt = new Date(y, m - 1, d + i), key = DAYS[(dt.getDay() + 6) % 7];
+    const iso = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+    for (const b of BLOCKS) if (avail.includes(`${key}-${b}`) && !taken.has(`${teacherId}#${iso}|${b}`)) out.push({ slot: `${iso}|${b}`, label: slotLabel(`${iso}|${b}`) });
+  }
+  return out;
+}
+function slotLabel(slot) {
+  if (!slot) return "Flexible time";
+  const [iso, b] = slot.split("|"), [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }) + ", " + b;
+}
+
 function toast(t) { $("toast").textContent = t; $("toast").hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => ($("toast").hidden = true), 2600); }
 
 let S = null, view = "market", skillFilter = "", bookFor = null, hours = 1, doneFor = null, rating = 5;
@@ -282,6 +355,7 @@ function renderJoin() {
   const n = S.members.length;
   $("liveCount").textContent = n ? `${n} ${n === 1 ? "person has" : "people have"} joined` : "Be the first to join";
   $("joinCount").textContent = n ? `${n} members` : "";
+  if (!$("jAvail").childElementCount) drawAvail("jAvail", ["tue-evening", "thu-evening"]);
   const list = n ? S.members.slice(0, 6) : EXAMPLES;
   $("previewPeople").replaceChildren(...list.map((p) => personCard(p, null, true)));
   document.querySelectorAll(".suggest").forEach((box) => {
@@ -338,7 +412,7 @@ function personCard(p, isSwap, preview) {
 function sessRow(s, role) {
   const other = role === "teacher" ? s.learner : s.teacher;
   const who = el("div", { className: "who" }, el("b", { textContent: `${title(s.skill)} · ${s.hours} h` }),
-    el("div", { className: "small muted", textContent: (role === "teacher" ? "Learner: " : "Teacher: ") + nameOf(other) }),
+    el("div", { className: "small muted", textContent: (role === "teacher" ? "Learner: " : "Teacher: ") + nameOf(other) + " · " + slotLabel(s.slot) }),
     s.note ? el("div", { className: "small", textContent: "“" + s.note + "”" }) : null,
     s.review ? el("div", { className: "small muted", textContent: "★".repeat(s.rating || 0) + " " + s.review }) : null);
   const acts = el("div", { className: "sess-actions" });
@@ -362,6 +436,7 @@ function renderProfile() {
   if (!document.activeElement?.closest("#profileForm")) {
     $("pName").value = me.name; $("pMajor").value = me.major; $("pHeadline").value = me.headline;
     $("pTeach").value = me.teaches.map(title).join(", "); $("pWant").value = me.wants.map(title).join(", ");
+    drawAvail("pAvail", me.availability);
   }
   $("balN").textContent = w.balance; $("heldN").textContent = w.held; $("myCode").textContent = me.code;
   $("ledger").replaceChildren(...w.rows.map((r) => el("tr", {}, el("td", { textContent: r.label }),
@@ -385,7 +460,7 @@ function renderCampus() {
 $("joinForm").addEventListener("submit", async (e) => {
   e.preventDefault(); $("joinErr").textContent = ""; $("joinBtn").disabled = true;
   try {
-    const r = await api("/api/join", "POST", { name: $("jName").value, major: $("jMajor").value, teaches: $("jTeach").value, wants: $("jWant").value });
+    const r = await api("/api/join", "POST", { name: $("jName").value, major: $("jMajor").value, teaches: $("jTeach").value, wants: $("jWant").value, availability: getAvail("jAvail") });
     tokenStore.set(r.token); await refresh(); toast("Welcome! You have 2 credits to spend."); show("market");
   } catch (err) { $("joinErr").textContent = err.message; }
   $("joinBtn").disabled = false;
@@ -400,7 +475,7 @@ $("codeForm").addEventListener("submit", async (e) => {
 $("logoutBtn").onclick = () => { tokenStore.set(""); S.me = null; toast("Logged out. Your code logs you back in."); refresh(); };
 $("profileForm").addEventListener("submit", async (e) => {
   e.preventDefault(); $("saveBtn").disabled = true;
-  try { await api("/api/profile", "PUT", { name: $("pName").value, major: $("pMajor").value, headline: $("pHeadline").value, teaches: $("pTeach").value, wants: $("pWant").value });
+  try { await api("/api/profile", "PUT", { name: $("pName").value, major: $("pMajor").value, headline: $("pHeadline").value, teaches: $("pTeach").value, wants: $("pWant").value, availability: getAvail("pAvail") });
     $("saveMsg").textContent = "Saved."; document.activeElement.blur(); await refresh(); }
   catch (err) { $("saveMsg").textContent = err.message; }
   $("saveBtn").disabled = false;
@@ -409,11 +484,14 @@ async function doAct(s, action, msg, body) {
   try { await api(`/api/sessions/${s.id}/${action}`, "POST", body || {}); toast(msg); await refresh(); }
   catch (err) { toast(err.message); }
 }
-function openBook(p) {
-  bookFor = p; hours = 1; $("bookTitle").textContent = `Book ${p.name}`;
-  const sorted = [...p.teaches].sort((a, b) => S.me.wants.includes(b) - S.me.wants.includes(a));
+function openBook(p, preset = {}) {
+  bookFor = p; hours = preset.hours || 1; $("bookTitle").textContent = `Book ${p.name}`;
+  const sorted = [...p.teaches].sort((a, b) => (b === preset.skill) - (a === preset.skill) || S.me.wants.includes(b) - S.me.wants.includes(a));
   $("bSkill").replaceChildren(...sorted.map((t) => el("option", { value: t, textContent: title(t) })));
-  $("bNote").value = ""; updateCost(); $("bookDlg").showModal();
+  const slots = upcoming(p.availability || [], p.id, 14);
+  $("bSlot").replaceChildren(...slots.map((s) => el("option", { value: s.slot, textContent: s.label })), el("option", { value: "", textContent: "Flexible: agree on a time in chat" }));
+  $("bSlot").value = preset.slot && slots.some((s) => s.slot === preset.slot) ? preset.slot : (slots[0]?.slot || "");
+  $("bNote").value = preset.note || ""; updateCost(); $("bookDlg").showModal();
 }
 function updateCost() {
   const bal = S.wallet.balance, cap = S.rules.freeActive;
@@ -428,7 +506,7 @@ $("hMinus").onclick = () => { hours = Math.max(1, hours - 1); updateCost(); };
 $("hPlus").onclick = () => { hours = Math.min(S.rules.maxHours, hours + 1); updateCost(); };
 $("bookForm").addEventListener("submit", async (e) => {
   if (e.submitter?.value !== "ok" || !bookFor) return;
-  try { await api("/api/sessions", "POST", { teacher: bookFor.id, skill: $("bSkill").value, hours, note: $("bNote").value });
+  try { await api("/api/sessions", "POST", { teacher: bookFor.id, skill: $("bSkill").value, hours, note: $("bNote").value, slot: $("bSlot").value });
     toast(`Request sent to ${bookFor.name}`); await refresh(); show("sessions"); }
   catch (err) { toast(err.message); }
 });
@@ -447,6 +525,47 @@ $("doneForm").addEventListener("submit", (e) => {
 });
 $("buyBtn").onclick = () => { show("plans"); toast("Credit packs launch with payments. Teach a session to earn now."); };
 $("q").addEventListener("input", () => { skillFilter = ""; renderMarket(); });
+
+// ---------- AI need matcher ----------
+const DEMO_NEED = "My spreadsheet has thousands of rows and I need a weekly summary by category before Friday.";
+$("tryNeed").onclick = () => { $("needIn").value = DEMO_NEED; $("needIn").focus(); };
+$("needForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const need = $("needIn").value.trim();
+  if (need.length < 8) { toast("Tell us a bit more about what you need."); return; }
+  $("needBtn").disabled = true;
+  $("needOut").replaceChildren(el("div", { className: "thinking" }, el("span", { className: "spin" }), el("span", { textContent: "Working out which skill solves this, then checking who's free…" })));
+  try { renderNeed(await api("/api/match", "POST", { need })); }
+  catch (err) { $("needOut").replaceChildren(el("p", { className: "err", textContent: err.message })); }
+  $("needBtn").disabled = false;
+});
+function renderNeed(r) {
+  const p = r.plan, ai = r.source === "ai";
+  const skillsTxt = p.skills.map((s) => title(s.name) + (s.catalog_match && s.catalog_match !== s.name ? ` (${title(s.catalog_match)})` : "")).join(", ") || "No clear skill found";
+  const planBox = el("div", { className: "plan-box" },
+    el("span", { className: "eyebrow", textContent: ai ? "What you need, according to Claude" : "Keyword match (AI is offline)" }),
+    el("b", { textContent: skillsTxt }),
+    el("p", { className: "small", textContent: p.explanation }),
+    el("div", { className: "chips" },
+      el("span", { className: "chip", textContent: `Suggested: ${p.hours} h session` }),
+      r.deadline_label ? el("span", { className: "chip", textContent: `Needed by ${r.deadline_label}` }) : null,
+      el("span", { className: "chip", textContent: `Costs ${p.hours} credit${p.hours > 1 ? "s" : ""}` })));
+  const cards = r.matches.map((m, i) => {
+    const u = m.user, av = el("span", { className: "avatar", textContent: initials(u.name) }); av.style.background = `hsl(${hue(u.id)} 45% 38%)`;
+    const why = el("ul", { className: "why" }, ...m.reasons.map((x) => el("li", { className: x.kind, textContent: x.text })));
+    const preset = { skill: m.skill, hours: p.hours, note: `${p.session_title}. ${r.need}`.slice(0, 300) };
+    const slots = el("div", { className: "slots" }, ...m.slots.map((s) => { const b = el("button", { type: "button", className: "slotbtn", textContent: "Book " + s.label });
+      b.onclick = () => openBook(u, { ...preset, slot: s.slot }); return b; }));
+    const other = el("button", { type: "button", className: "btn", textContent: m.slots.length ? "Other time" : "Request a flexible time" }); other.onclick = () => openBook(u, preset);
+    return el("article", { className: "match" + (i === 0 ? " best" : "") },
+      el("div", { className: "p-head" }, av, el("div", {}, el("b", { textContent: u.name }), el("span", { textContent: [u.major, u.headline].filter(Boolean).join(" · ") })),
+        i === 0 ? el("span", { className: "tag swap", textContent: "Best match" }) : null),
+      el("span", { className: "eyebrow", textContent: "Why this match" }), why, slots, el("div", { className: "row" }, other));
+  });
+  const none = el("div", { className: "empty", textContent: "Nobody on SkillSwap teaches this yet. We've noted it as a skill gap, and you'll see it on the Campus page." });
+  $("needOut").replaceChildren(el("div", { className: "view", style: "gap:12px" }, planBox, ...(cards.length ? cards : [none])));
+  $("needOut").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+}
 
 // ---------- share ----------
 $("shareBtn").onclick = () => {
