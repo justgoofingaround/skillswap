@@ -16,7 +16,11 @@ from pathlib import Path
 
 DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or ""
 PG = DATABASE_URL.startswith("postgres")
-SQLITE_PATH = os.environ.get("DB_PATH", str(Path(__file__).resolve().parent.parent / "skillswap.db"))
+ON_VERCEL = bool(os.environ.get("VERCEL"))
+# Vercel's filesystem is read-only except /tmp. Without Postgres there, fall back to /tmp
+# so the app still works, but data is temporary (per instance, lost on redeploy).
+SQLITE_PATH = os.environ.get("DB_PATH") or ("/tmp/skillswap.db" if ON_VERCEL else str(Path(__file__).resolve().parent.parent / "skillswap.db"))
+STORAGE = "postgres" if PG else ("temporary" if ON_VERCEL else "local")
 AI_MODEL = "claude-opus-5-5"
 
 START_CREDITS = 2
@@ -465,7 +469,7 @@ class handler(BaseHTTPRequestHandler):
         names = {u["id"]: u["name"] for u in users}
         taken = sorted({s["teacher"] + "#" + s["slot"] for s in sessions if s["status"] in ("requested", "accepted") and s.get("slot")})
         out = {"members": users, "stats": teacher_stats(sessions), "campus": campus(users, sessions), "taken": taken,
-               "today": campus_today().isoformat(), "aiEnabled": bool(os.environ.get("ANTHROPIC_API_KEY")),
+               "today": campus_today().isoformat(), "aiEnabled": bool(os.environ.get("ANTHROPIC_API_KEY")), "storage": STORAGE,
                "rules": {"start": START_CREDITS, "maxHours": MAX_HOURS, "pairCap": PAIR_WEEKLY_CAP, "freeActive": FREE_ACTIVE}}
         if me:
             mine = [s for s in sessions if me["id"] in (s["learner"], s["teacher"])]

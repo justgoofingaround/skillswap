@@ -308,8 +308,12 @@ async function api(path, method = "GET", body) {
   return j;
 }
 async function refresh() {
-  try { S = await api("/api/state"); $("offline").hidden = true; render(); }
-  catch { $("offline").hidden = false; }
+  try {
+    S = await api("/api/state");
+    const temp = S.storage === "temporary";
+    $("offline").textContent = temp ? "Demo mode: no database is connected, so data may reset. Connect Neon Postgres in Vercel → Storage." : "";
+    $("offline").hidden = !temp; render();
+  } catch (err) { $("offline").textContent = "Can't load SkillSwap data: " + err.message + " Retrying…"; $("offline").hidden = false; }
 }
 
 // ---------- navigation ----------
