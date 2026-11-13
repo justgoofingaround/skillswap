@@ -287,7 +287,8 @@ function upcoming(avail, teacherId, days = 7) {
   for (let i = 0; i < days; i++) {
     const dt = new Date(y, m - 1, d + i), key = DAYS[(dt.getDay() + 6) % 7];
     const iso = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
-    for (const b of BLOCKS) if (avail.includes(`${key}-${b}`) && !taken.has(`${teacherId}#${iso}|${b}`)) out.push({ slot: `${iso}|${b}`, label: slotLabel(`${iso}|${b}`) });
+    const isToday = i === 0, hourNow = new Date().getHours(), END = { morning: 12, afternoon: 17, evening: 21 };
+    for (const b of BLOCKS) if (!(isToday && hourNow >= END[b]) && avail.includes(`${key}-${b}`) && !taken.has(`${teacherId}#${iso}|${b}`)) out.push({ slot: `${iso}|${b}`, label: slotLabel(`${iso}|${b}`) });
   }
   return out;
 }
@@ -547,7 +548,7 @@ function renderNeed(r) {
   const p = r.plan, ai = r.source === "ai";
   const skillsTxt = p.skills.map((s) => title(s.name) + (s.catalog_match && s.catalog_match !== s.name ? ` (${title(s.catalog_match)})` : "")).join(", ") || "No clear skill found";
   const planBox = el("div", { className: "plan-box" },
-    el("span", { className: "eyebrow", textContent: ai ? "What you need, according to Claude" : "Keyword match (AI is offline)" }),
+    el("span", { className: "eyebrow", textContent: ai ? `What you need, according to AI (${r.provider})` : "Keyword match (AI is offline)" }),
     el("b", { textContent: skillsTxt }),
     el("p", { className: "small", textContent: p.explanation }),
     el("div", { className: "chips" },

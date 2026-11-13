@@ -125,21 +125,31 @@ def init_db():
 
 
 # ---------- time & slots (campus time: New York) ----------
-def campus_today():
+BLOCK_END_HOUR = {"morning": 12, "afternoon": 17, "evening": 21}
+
+
+def campus_now():
     try:
         from zoneinfo import ZoneInfo
-        return datetime.now(ZoneInfo("America/New_York")).date()
+        return datetime.now(ZoneInfo("America/New_York"))
     except Exception:
-        return (datetime.now(timezone.utc) - timedelta(hours=5)).date()
+        return datetime.now(timezone.utc) - timedelta(hours=5)
+
+
+def campus_today():
+    return campus_now().date()
 
 
 def upcoming_slots(availability, days=7, start=None):
     """Concrete dates for a weekly availability list, soonest first: [{"slot": "2026-11-13|evening", ...}]."""
-    start = start or campus_today()
+    now = campus_now()
+    start = start or now.date()
     out = []
     for i in range(days):
         d = start + timedelta(days=i)
         for b in BLOCKS:
+            if d == now.date() and now.hour >= BLOCK_END_HOUR[b]:
+                continue  # this block is already over today
             if f"{DAYS[d.weekday()]}-{b}" in availability:
                 out.append({"slot": f"{d.isoformat()}|{b}", "date": d.isoformat(), "block": b})
     return out
@@ -288,11 +298,19 @@ NEED_SCHEMA = {
 }
 
 
-def ai_interpret(need, catalog, today):
-    import anthropic
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 
-    client = anthropic.Anthropic(timeout=25.0, max_retries=1)
-    prompt = (
+
+def ai_provider():
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return "Claude"
+    if os.environ.get("GROQ_API_KEY"):
+        return "Groq"
+    return ""
+
+
+def need_prompt(need, catalog, today):
+    return (
         "A university student on a peer skill-exchange platform described what they need help with. "
         "They may not know the name of the skill. Work out the specific skill(s) that would solve it.\n\n"
         f"Today is {today.strftime('%A, %Y-%m-%d')} (campus time, New York).\n"
@@ -307,6 +325,48 @@ def ai_interpret(need, catalog, today):
         "- hours: 1 unless the need clearly takes longer. Maximum 3.\n\n"
         f"Student's words:\n\"\"\"{need}\"\"\""
     )
+
+
+def groq_interpret(need, catalog, today):
+    """Groq's OpenAI-compatible chat API via the standard library (no extra dependency)."""
+    import urllib.request
+
+    body = {
+        "model": GROQ_MODEL,
+        "temperature": 0.2,
+        "max_tokens": 2000,
+        "reasoning_effort": "low",
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": "You return only a JSON object that matches this JSON Schema, with no other text:\n" + json.dumps(NEED_SCHEMA)},
+            {"role": "user", "content": need_prompt(need, catalog, today)},
+        ],
+    }
+    req = urllib.request.Request(
+        "https://api.groq.com/openai/v1/chat/completions",
+        data=json.dumps(body).encode(),
+        headers={"Authorization": "Bearer " + os.environ["GROQ_API_KEY"], "Content-Type": "application/json",
+                 "User-Agent": "SkillSwap/1.0"},
+    )
+    with urllib.request.urlopen(req, timeout=20) as r:
+        data = json.loads(r.read())
+    out = json.loads(data["choices"][0]["message"]["content"])
+    out.setdefault("summary", need[:80])
+    out.setdefault("explanation", "")
+    out.setdefault("session_title", need[:60])
+    out.setdefault("hours", 1)
+    out.setdefault("deadline_date", "")
+    out["skills"] = [{"name": str(s.get("name", "")), "catalog_match": str(s.get("catalog_match") or ""),
+                      "keywords": [str(k) for k in (s.get("keywords") or [])]}
+                     for s in (out.get("skills") or []) if isinstance(s, dict)]
+    return out
+
+
+def claude_interpret(need, catalog, today):
+    import anthropic
+
+    client = anthropic.Anthropic(timeout=25.0, max_retries=1)
+    prompt = need_prompt(need, catalog, today)
     resp = client.beta.messages.create(
         model=AI_MODEL,
         max_tokens=4000,
@@ -493,7 +553,7 @@ class handler(BaseHTTPRequestHandler):
         names = {u["id"]: u["name"] for u in users}
         taken = sorted({s["teacher"] + "#" + s["slot"] for s in sessions if s["status"] in ("requested", "accepted") and s.get("slot")})
         out = {"members": users, "stats": teacher_stats(sessions), "campus": campus(users, sessions), "taken": taken,
-               "today": campus_today().isoformat(), "aiEnabled": bool(os.environ.get("ANTHROPIC_API_KEY")), "storage": STORAGE,
+               "today": campus_today().isoformat(), "aiEnabled": bool(ai_provider()), "storage": STORAGE,
                "rules": {"start": START_CREDITS, "maxHours": MAX_HOURS, "pairCap": PAIR_WEEKLY_CAP, "freeActive": FREE_ACTIVE}}
         if me:
             mine = [s for s in sessions if me["id"] in (s["learner"], s["teacher"])]
@@ -543,14 +603,17 @@ class handler(BaseHTTPRequestHandler):
         sessions = d.all("SELECT * FROM sessions")
         catalog = sorted({t for u in users for t in u["teaches"] if u["id"] != me_row["id"]})
         today = campus_today()
-        source = "ai"
+        source, provider = "ai", ai_provider()
         try:
-            if not os.environ.get("ANTHROPIC_API_KEY"):
-                raise RuntimeError("no key")
-            plan = ai_interpret(need, catalog, today)
+            if provider == "Claude":
+                plan = claude_interpret(need, catalog, today)
+            elif provider == "Groq":
+                plan = groq_interpret(need, catalog, today)
+            else:
+                raise RuntimeError("no AI key configured")
         except Exception as e:
             print("AI fallback:", repr(e))
-            plan, source = keyword_interpret(need, catalog), "keywords"
+            plan, source, provider = keyword_interpret(need, catalog), "keywords", ""
         plan["skills"] = [s for s in plan.get("skills", []) if s.get("name")][:3]
         plan["hours"] = max(1, min(MAX_HOURS, int(plan.get("hours") or 1)))
         me = public_user(me_row)
@@ -558,7 +621,7 @@ class handler(BaseHTTPRequestHandler):
         for m in matches:
             for s in m["slots"]:
                 s["label"] = slot_label(s["slot"])
-        return {"source": source, "plan": plan, "matches": matches, "need": need,
+        return {"source": source, "provider": provider, "plan": plan, "matches": matches, "need": need,
                 "deadline_label": (date.fromisoformat(plan["deadline_date"]).strftime("%a %b %-d") if plan.get("deadline_date") else "")}
 
     def book(self, d, b):
